@@ -698,10 +698,11 @@ class AgentPane(Gtk.Box):
             if not any(a.split("=")[0] in SESSION_FLAGS for a in self.app.claude_args):
                 resume = claude_session_exists(self.session_id)
                 argv += ["--resume" if resume else "--session-id", self.session_id]
-            # a pasta foi escolhida no próprio CLARK: já marca como confiável e, se o diálogo
-            # aparecer mesmo assim (ex.: home), aceita pela tela
-            trust_folder(self.cwd)
-            self.auto_trust = True
+            # opcional ("auto_trust" no config): a pasta foi escolhida no próprio CLARK, então já marca
+            # como confiável e, se o diálogo aparecer mesmo assim (ex.: home), aceita pela tela
+            if self.app.config.get("auto_trust", False):
+                trust_folder(self.cwd)
+                self.auto_trust = True
         else:
             self.term.feed(b"\r\n\x1b[1;31m  claude nao encontrado no PATH.\x1b[0m"
                            b" Instale o Claude Code e reabra o CLARK.\r\n\r\n")
