@@ -29,12 +29,12 @@ sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-vte-2.91
 ## Instalação
 
 ```bash
-git clone git@github.com:GabrielBruno7/clark.git ~/clark
+git clone https://github.com/GabrielBruno7/clark.git ~/clark
 cd ~/clark
 ./install.sh
 ```
 
-O instalador não usa sudo: cria o comando `clark` em `~/.local/bin`, os ícones e o atalho no menu de aplicativos.
+O instalador não usa sudo: confere as dependências e cria o comando `clark` em `~/.local/bin`, os ícones e o atalho no menu de aplicativos.
 Não apague a pasta clonada depois de instalar: o comando `clark` aponta para ela.
 
 ## Uso
@@ -52,3 +52,25 @@ clark -- <args>       # repassa argumentos para cada `claude`
 ```bash
 cd ~/clark && git pull
 ```
+
+## Configuração
+
+As preferências ficam em `~/.config/clark/config.json` e a maior parte é ajustada pela própria interface (tema, layout, tarefas).
+
+**`auto_trust`** (padrão `false`): com `true`, o CLARK marca como confiável no `~/.claude.json` a pasta em que você abre um agente e aceita sozinho o diálogo "Do you trust the files in this folder?" do Claude Code. É prático, mas ignora uma proteção do Claude Code, então só ligue se você sempre abre agentes em pastas suas:
+
+```json
+{ "auto_trust": true }
+```
+
+## Desinstalar
+
+```bash
+~/clark/uninstall.sh
+```
+
+Remove o comando, o atalho e os ícones. A pasta do repositório e as configurações (`~/.config/clark`) continuam lá.
+
+## Licença
+
+[MIT](LICENSE)
