@@ -570,6 +570,12 @@ class Splash(Gtk.DrawingArea):
 
 # ───────────────────────── painel de um agente ─────────────────────────
 SESSION_FLAGS = ("-c", "--continue", "-r", "--resume", "--session-id")
+# variáveis que uma sessão do Claude Code passa aos processos filhos: se o CLARK for aberto de dentro
+# de uma, cada agente se acharia uma subsessão (e não salvaria o histórico da conversa). Configurações
+# do usuário (ex.: CLAUDE_CODE_USE_BEDROCK) ficam de fora desta lista e continuam chegando aos agentes.
+PARENT_SESSION_VARS = ("CLAUDECODE", "CLAUDE_PID", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID",
+                       "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_EXECPATH",
+                       "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN")
 
 
 AUTO_NAME = re.compile(r"AGENT \d+$")
@@ -2226,8 +2232,15 @@ def parse_args(argv):
     return opts
 
 
+def forget_parent_session():
+    # sai do próprio ambiente: o VTE soma o env do spawn ao do processo, então filtrar lá não basta
+    for k in PARENT_SESSION_VARS:
+        os.environ.pop(k, None)
+
+
 def main():
     opts = parse_args(sys.argv[1:])
+    forget_parent_session()
     if opts["export_icon"]:
         make_icon_surface(opts["icon_size"]).write_to_png(opts["export_icon"])
         return
