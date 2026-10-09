@@ -1,6 +1,18 @@
+<p align="center"><img src="docs/icone.png" width="96" alt="ícone do CLARK"></p>
+
 # CLARK
 
 Launcher retrô em pixel art para rodar vários agentes [Claude Code](https://claude.com/claude-code) ao mesmo tempo, numa única janela.
+
+![Tela de abertura do CLARK](docs/splash.png)
+
+**Modo foco:** um agente em destaque, a lista de agentes com o status de cada um (WORKING, DONE, IDLE) e a lista de tarefas ao lado.
+
+![CLARK no modo foco, tema escuro](docs/foco.png)
+
+**Modo grade:** todos os agentes lado a lado (aqui no tema claro).
+
+![CLARK no modo grade, tema claro](docs/grade.png)
 
 ## Requisitos
 
