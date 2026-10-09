@@ -29,6 +29,7 @@ Não apague a pasta clonada depois de instalar: o comando `clark` aponta para el
 
 ```bash
 clark                 # abre o launcher
+clark ~/projeto -n 3  # abre na pasta, já com 3 agentes
 clark --no-splash     # pula a tela de abertura
 clark --fresh         # começa sem restaurar a sessão anterior
 clark -- <args>       # repassa argumentos para cada `claude`
