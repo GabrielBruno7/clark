@@ -36,6 +36,7 @@ cd ~/clark
 
 O instalador não usa sudo: confere as dependências e cria o comando `clark` em `~/.local/bin`, os ícones e o atalho no menu de aplicativos.
 Não apague a pasta clonada depois de instalar: o comando `clark` aponta para ela.
+Se o terminal disser `command not found: clark`, falta `~/.local/bin` no PATH (o instalador avisa). Adicione `export PATH="$HOME/.local/bin:$PATH"` ao `~/.zshrc` ou `~/.bashrc`.
 
 ## Uso
 

@@ -42,3 +42,11 @@ DESKTOP
 gtk-update-icon-cache -q "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 update-desktop-database -q "$HOME/.local/share/applications" 2>/dev/null || true
 echo "CLARK instalado! Rode 'clark' no terminal ou procure 'Clark' no menu de aplicativos."
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *)
+    echo "Aviso: ~/.local/bin não está no seu PATH, então o comando 'clark' não vai ser encontrado." >&2
+    echo "  Adicione ao ~/.zshrc ou ~/.bashrc:  export PATH=\"\$HOME/.local/bin:\$PATH\"" >&2
+    echo "  Ou rode direto: ~/.local/bin/clark" >&2
+    ;;
+esac
