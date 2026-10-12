@@ -16,7 +16,7 @@ Launcher retrô em pixel art para rodar vários agentes [Claude Code](https://cl
 
 ## Requisitos
 
-- Linux com GTK 3 (testado no Ubuntu 22.04)
+- Linux com GTK 3 (testado no Ubuntu 22.04), ou Windows 10/11 [via WSL](#windows-via-wsl)
 - Python 3 com PyGObject, VTE e Cairo
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) instalado e logado (`claude` no PATH)
 
@@ -25,6 +25,21 @@ No Ubuntu/Debian:
 ```bash
 sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-vte-2.91
 ```
+
+### Windows (via WSL)
+
+O CLARK não roda nativamente no Windows (depende do VTE, que só existe no Linux), mas funciona pelo WSL 2: o Windows 10/11 abre a janela dele como a de qualquer outro programa, via WSLg.
+
+1. No PowerShell, instale o WSL com Ubuntu (se ainda não tiver) e reinicie se for pedido:
+
+   ```powershell
+   wsl --install -d Ubuntu
+   ```
+
+2. Dentro do Ubuntu, instale as dependências acima e o [Claude Code](https://docs.claude.com/en/docs/claude-code) (no Linux, não no Windows) e siga a [instalação](#instalação) normal.
+3. Rode `clark` no terminal do Ubuntu.
+
+Os agentes rodam dentro do Linux: prefira projetos dentro do WSL (`~/...`). Pastas do Windows ficam em `/mnt/c/...`, mas o acesso a elas é bem mais lento.
 
 ## Instalação
 
