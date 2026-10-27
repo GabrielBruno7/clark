@@ -8,8 +8,10 @@ import re
 import shutil
 import signal
 import sys
+import threading
 import time
 import unicodedata
+import urllib.request
 import uuid
 from glob import glob
 from string import Template
@@ -25,6 +27,9 @@ from gi.repository import Gdk, Gio, GLib, Gtk, Pango, PangoCairo, Vte
 
 VERSION = "0.1.0"
 CONFIG_PATH = os.path.join(GLib.get_user_config_dir(), "clark", "config.json")
+CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
+USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+USAGE_REFRESH_S = 300
 
 
 # ───────────────────────── paleta ─────────────────────────
@@ -185,6 +190,7 @@ _LEGS = [["....DD...DD.....", "....DD...DD....."],
 _FIRE = [(".Y..", "F", "YYFY", ".FY."),
          ("..Y.", "Y", "FYYF", "Y..F")]
 SPRITE_W, SPRITE_H = 16, 12
+HEAT_W = 280
 
 
 def mascot_rows(step=0, blink=False, sleep=False, arms_up=False, fire=0):
@@ -1432,6 +1438,9 @@ class Clark(Gtk.Window):
         self.todo_visible = bool(self.config.get("todo_visible", True))
         self.t_start = time.monotonic()
         self.t = 0.0
+        self.week_pct = None  # uso semanal real (0-100), None até a primeira leitura
+        self.week_reset = ""
+        self.heat = 0.0       # valor animado que o caldeirão mostra
 
         self.get_style_context().add_class("clark")
         self.set_default_size(1360, 840)
@@ -1460,6 +1469,8 @@ class Clark(Gtk.Window):
         self.connect("delete-event", self._on_delete)
         self.connect("focus-in-event", lambda *_: self.set_urgency_hint(False))
         GLib.timeout_add(100, self._tick)
+        self._fetch_usage()
+        GLib.timeout_add_seconds(USAGE_REFRESH_S, self._fetch_usage)
         self._check_claude()
 
         self.show_all()
@@ -1530,6 +1541,10 @@ class Clark(Gtk.Window):
         self.stats = Gtk.DrawingArea()
         self.stats.connect("draw", self._draw_stats)
         top.pack_start(self.stats, True, True, 0)
+        self.heat_area = Gtk.DrawingArea()
+        self.heat_area.set_size_request(HEAT_W, 34)
+        self.heat_area.connect("draw", self._draw_heat)
+        top.pack_start(self.heat_area, False, False, 0)
 
         self.folder_btn = self._button("", self.choose_folder)
         self.folder_btn.set_tooltip_text("Pasta onde os novos agentes abrem (Ctrl+Shift+D)")
@@ -2128,11 +2143,116 @@ class Clark(Gtk.Window):
                     p.refresh_preview(now)
                 p.card.queue_draw()
         self.stats.queue_draw()
+        if self.week_pct is not None:
+            self.heat += (self.week_pct - self.heat) * 0.08
+        self.heat_area.queue_draw()
         if self.content.get_visible_child_name() == "empty":
             self.empty_area.queue_draw()
         if changed:
             self._update_title()
         return True
+
+    # ── limite semanal ──
+    def _fetch_usage(self):
+        def work():
+            pct = reset = None
+            try:
+                with open(CREDENTIALS_PATH) as f:
+                    token = json.load(f)["claudeAiOauth"]["accessToken"]
+                req = urllib.request.Request(USAGE_URL, headers={"Authorization": f"Bearer {token}",
+                                                                 "anthropic-beta": "oauth-2025-04-20"})
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    week = json.load(r)["seven_day"]
+                pct, reset = float(week["utilization"]), week.get("resets_at") or ""
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+            if pct is not None:
+                GLib.idle_add(self._set_usage, pct, reset)
+        threading.Thread(target=work, daemon=True).start()
+        return True
+
+    def _set_usage(self, pct, reset):
+        first = self.week_pct is None
+        self.week_pct, self.week_reset = clamp(pct, 0, 100), reset
+        if first:
+            self.heat = self.week_pct
+        self.heat_area.set_tooltip_text(f"Limite semanal: {pct:.0f}% usado" +
+                                        (f"\nRenova em {self._reset_label()}" if reset else ""))
+        return False
+
+    def _reset_label(self):
+        try:
+            from datetime import datetime
+            left = datetime.fromisoformat(self.week_reset).timestamp() - time.time()
+        except ValueError:
+            return self.week_reset
+        d, h = int(left // 86400), int(left % 86400 // 3600)
+        return f"{d}d {h}h" if d > 0 else f"{h}h {int(left % 3600 // 60)}min"
+
+    def _draw_heat(self, w, cr):
+        W, H, t = w.get_allocated_width(), w.get_allocated_height(), self.t
+        cr.set_antialias(cairo.ANTIALIAS_NONE)
+        f = clamp(self.heat / 100)
+        P = 2
+        # dragão à esquerda, fora da barra, soprando mais forte quanto mais quente
+        step = int(t * 3) % 2
+        fire = int(t * (4 + f * 10)) % 2 + 1
+        draw_sprite(cr, mascot_rows(step, arms_up=bool(int(t * 2) % 2), fire=fire),
+                    0, (H - SPRITE_H * P) // 2, P, sprite_pal(ORANGE))
+        # barra
+        bx, bw, bh = (SPRITE_W + 4) * P + 4, W - (SPRITE_W + 4) * P - 8 - text_w("100%", 2) - 8, 18
+        by = (H - bh) // 2
+        cr.set_source_rgb(*SHADOW)
+        cr.rectangle(bx - 3, by - 3, bw + 6, bh + 6)
+        cr.fill()
+        cr.set_source_rgb(*BG)
+        cr.rectangle(bx, by, bw, bh)
+        cr.fill()
+        # líquido: azul frio -> amarelo -> laranja -> vermelho
+        stops = [(0.0, hexc("#3aa0ff")), (0.45, YELLOW), (0.75, ORANGE), (1.0, RED)]
+        col = stops[-1][1]
+        for (a, ca), (b, cb) in zip(stops, stops[1:]):
+            if f <= b:
+                col = mix(ca, cb, (f - a) / (b - a))
+                break
+        fw = int(bw * f)
+        if fw > 0:
+            cr.save()
+            cr.rectangle(bx, by, bw, bh)
+            cr.clip()
+            amp = 1 + f * 2
+            for y in range(bh):  # ponta ondulada, mais agitada quando quente
+                edge = fw + int(math.sin(t * (3 + f * 6) + y * 0.9) * amp)
+                cr.set_source_rgb(*(mix(col, WHITE, 0.25) if y < 3 else col))
+                cr.rectangle(bx, by + y, max(0, edge), 1)
+                cr.fill()
+            cr.set_source_rgba(*mix(col, BLACK, 0.3), 0.6)
+            cr.rectangle(bx, by + bh - 4, fw, 4)
+            cr.fill()
+            # bolhas: mais numerosas e rápidas conforme esquenta
+            for i in range(int(2 + f * 16)):
+                ph = (t * (0.3 + f * 1.2) + i * 0.37) % 1.0
+                x = bx + int(((i * 0.618) % 1.0) * max(1, fw - 4))
+                sz = 2 if i % 3 else 4
+                cr.set_source_rgba(*mix(col, WHITE, 0.6), 0.9 - ph * 0.6)
+                cr.rectangle(x, by + bh - 2 - int(ph * (bh - 2)), sz, sz)
+                cr.fill()
+            cr.restore()
+        # vapor quando passa de 75%
+        if f > 0.75:
+            for i in range(3):
+                ph = (t * 0.8 + i / 3) % 1.0
+                cr.set_source_rgba(*INK, (1 - ph) * 0.5)
+                cr.rectangle(bx + int(fw * (0.3 + 0.25 * i)) + int(math.sin(t * 4 + i) * 2), by - 3 - int(ph * 6), 2, 2)
+                cr.fill()
+        # brasas do sopro do dragão chegando na barra
+        for i in range(int(2 + f * 6)):
+            ph = (t * 2 + i * 0.29) % 1.0
+            cr.set_source_rgba(*(YELLOW if i % 2 else ORANGE), 1 - ph)
+            cr.rectangle(SPRITE_W * P + int(ph * 12), H // 2 - 2 + int(math.sin(i * 2.3 + t * 6) * 5 * ph), 2, 2)
+            cr.fill()
+        label = "--" if self.week_pct is None else f"{self.week_pct:.0f}%"
+        draw_text(cr, label, W - text_w(label, 2), (H - 14) // 2, 2, col if self.week_pct is not None else DIM)
 
     # ── desenhos da barra / estado vazio ──
     def _draw_logo(self, w, cr):
