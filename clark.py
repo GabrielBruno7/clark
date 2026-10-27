@@ -1540,16 +1540,12 @@ class Clark(Gtk.Window):
         top.pack_start(logo, False, False, 0)
         self.stats = Gtk.DrawingArea()
         self.stats.connect("draw", self._draw_stats)
-        top.pack_start(self.stats, True, True, 0)
+        top.pack_start(self.stats, False, False, 0)
         self.heat_area = Gtk.DrawingArea()
         self.heat_area.set_size_request(HEAT_W, 34)
         self.heat_area.connect("draw", self._draw_heat)
-        top.pack_start(self.heat_area, False, False, 0)
+        top.pack_start(self.heat_area, True, True, 0)
 
-        self.folder_btn = self._button("", self.choose_folder)
-        self.folder_btn.set_tooltip_text("Pasta onde os novos agentes abrem (Ctrl+Shift+D)")
-        self._update_folder_label()
-        top.pack_start(self.folder_btn, False, False, 0)
         self.layout_btn = self._button("", lambda *_: self.toggle_layout(),
                                        tip="Alternar layout foco / grade (Ctrl+Shift+L)")
         self._update_layout_label()
@@ -2050,18 +2046,11 @@ class Clark(Gtk.Window):
         dlg.set_current_folder(self.cwd)
         if dlg.run() == Gtk.ResponseType.ACCEPT:
             self.cwd = dlg.get_filename()
-            self._update_folder_label()
             self.save_config()
 
     def short_path(self, path):
         home = os.path.expanduser("~")
         return "~" + path[len(home):] if path.startswith(home) else path
-
-    def _update_folder_label(self):
-        p = self.short_path(self.cwd)
-        if len(p) > 28:
-            p = "…" + p[-27:]
-        self.folder_btn.set_label(f"DIR {p}")
 
     def _update_title(self):
         done = sum(p.state == "DONE" for p in self.panes)
@@ -2142,6 +2131,9 @@ class Clark(Gtk.Window):
                 if now - p.preview_at > (0.5 if p.last_change > p.preview_at else 2.0):
                     p.refresh_preview(now)
                 p.card.queue_draw()
+        stats_w = 16 + sum(text_w(f"{label} {n}", 2) + 34 for label, n, _ in self._stats_items())
+        if stats_w != self.stats.get_size_request()[0]:
+            self.stats.set_size_request(stats_w, -1)
         self.stats.queue_draw()
         if self.week_pct is not None:
             self.heat += (self.week_pct - self.heat) * 0.08
@@ -2190,8 +2182,9 @@ class Clark(Gtk.Window):
         return f"{d}d {h}h" if d > 0 else f"{h}h {int(left % 3600 // 60)}min"
 
     def _draw_heat(self, w, cr):
-        W, H, t = w.get_allocated_width(), w.get_allocated_height(), self.t
+        W, H, t = HEAT_W, w.get_allocated_height(), self.t
         cr.set_antialias(cairo.ANTIALIAS_NONE)
+        cr.translate((w.get_allocated_width() - W) // 2, 0)
         f = clamp(self.heat / 100)
         P = 2
         # dragão à esquerda, fora da barra, soprando mais forte quanto mais quente
@@ -2208,8 +2201,8 @@ class Clark(Gtk.Window):
         cr.set_source_rgb(*BG)
         cr.rectangle(bx, by, bw, bh)
         cr.fill()
-        # líquido: azul frio -> amarelo -> laranja -> vermelho
-        stops = [(0.0, hexc("#3aa0ff")), (0.45, YELLOW), (0.75, ORANGE), (1.0, RED)]
+        # líquido: verde no começo, laranja no meio, vermelho perto do fim
+        stops = [(0.0, GREEN), (0.3, GREEN), (0.5, ORANGE), (0.75, ORANGE), (0.9, RED), (1.0, RED)]
         col = stops[-1][1]
         for (a, ca), (b, cb) in zip(stops, stops[1:]):
             if f <= b:
@@ -2221,9 +2214,13 @@ class Clark(Gtk.Window):
             cr.rectangle(bx, by, bw, bh)
             cr.clip()
             amp = 1 + f * 2
+            # degradê: escuro onde o dragão sopra (esquerda), claro lá longe (ponta)
+            grad = cairo.LinearGradient(bx, 0, bx + fw, 0)
+            grad.add_color_stop_rgb(0, *mix(col, BLACK, 0.5))
+            grad.add_color_stop_rgb(1, *mix(col, WHITE, 0.3))
             for y in range(bh):  # ponta ondulada, mais agitada quando quente
                 edge = fw + int(math.sin(t * (3 + f * 6) + y * 0.9) * amp)
-                cr.set_source_rgb(*(mix(col, WHITE, 0.25) if y < 3 else col))
+                cr.set_source(grad)
                 cr.rectangle(bx, by + y, max(0, edge), 1)
                 cr.fill()
             cr.set_source_rgba(*mix(col, BLACK, 0.3), 0.6)
@@ -2238,6 +2235,20 @@ class Clark(Gtk.Window):
                 cr.rectangle(x, by + bh - 2 - int(ph * (bh - 2)), sz, sz)
                 cr.fill()
             cr.restore()
+        # reflexo de vidro no canto inferior direito da barra
+        cr.save()
+        cr.rectangle(bx, by, bw, bh)
+        cr.clip()
+        glass = cairo.RadialGradient(bx + bw, by + bh, 0, bx + bw, by + bh, bh * 2.2)
+        glass.add_color_stop_rgba(0, 1, 1, 1, 0.45)
+        glass.add_color_stop_rgba(1, 1, 1, 1, 0.0)
+        cr.set_source(glass)
+        cr.paint()
+        cr.set_source_rgba(1, 1, 1, 0.6)
+        cr.rectangle(bx + bw - 14, by + bh - 2, 14, 1)  # brilho na borda de baixo
+        cr.rectangle(bx + bw - 2, by + bh - 9, 1, 8)    # e na borda da direita
+        cr.fill()
+        cr.restore()
         # vapor quando passa de 75%
         if f > 0.75:
             for i in range(3):
@@ -2269,19 +2280,20 @@ class Clark(Gtk.Window):
         cr.paint()
         draw_text(cr, f"AGENTES {len(self.panes)}", 12, (H - 7) // 2, 1, DIM)
 
-    def _draw_stats(self, w, cr):
-        H = w.get_allocated_height()
-        cr.set_antialias(cairo.ANTIALIAS_NONE)
+    def _stats_items(self):
         counts = {s: sum(p.state == s for p in self.panes) for s in ("WORKING", "IDLE", "DONE", "EXITED")}
-        x, y = 16, (H - 14) // 2
         items = [("AGENTS", len(self.panes), INK), ("WORKING", counts["WORKING"], GREEN),
                  ("DONE", counts["DONE"], YELLOW), ("IDLE", counts["IDLE"], DIM)]
         if counts["EXITED"]:
             items.append(("GAME OVER", counts["EXITED"], RED))
-        for label, n, col in items:
+        return items
+
+    def _draw_stats(self, w, cr):
+        H = w.get_allocated_height()
+        cr.set_antialias(cairo.ANTIALIAS_NONE)
+        x, y = 16, (H - 14) // 2
+        for label, n, col in self._stats_items():
             s = f"{label} {n}"
-            if x + text_w(s, 2) + 16 > w.get_allocated_width():
-                break
             cr.set_source_rgb(*col)
             cr.rectangle(x, y + 4, 6, 6)
             cr.fill()
