@@ -72,6 +72,14 @@ THEMES = {
         agents=["#b07cff", "#5fd4e0", "#ff7ad9", "#6fe0b0", "#ffd36e", "#ff9a6b", "#7aa2ff", "#ff6b9a"],
         term=["#1d1630", "#ff6b9a", "#6fe0b0", "#ffd36e", "#7aa2ff", "#c49bff", "#5fd4e0", "#d9d0f0",
               "#5a4d7a", "#ff8fb3", "#93f0c8", "#ffe08f", "#9fbcff", "#dcbfff", "#8fe6ee", "#fbf8ff"]),
+    "pink": dict(
+        label="PINK", dark=True,
+        bg="#0d0709", bg2="#170d11", bg3="#241419", bg4="#361d26", bg5="#4a2833", shadow="#050204",
+        ink="#ffe6f0", dim="#a07884", accent="#ff4fa3", accent_hi="#ff7fbd", accent_lo="#d62d82",
+        on_accent="#0d0709", yellow="#ffd1e3", green="#ff9ccc", red="#ff3b6b",
+        agents=["#ff4fa3", "#ff9ccc", "#d62d82", "#ffd1e3", "#ff7fbd", "#c2185b", "#ffb3d6", "#ff3b6b"],
+        term=["#170d11", "#ff3b6b", "#ff7fbd", "#ffd1e3", "#d62d82", "#ff4fa3", "#ff9ccc", "#f3d4e0",
+              "#6b4655", "#ff6b93", "#ffa6d0", "#ffe6f0", "#ff66b3", "#ff7fbd", "#ffc2de", "#fff5f9"]),
 }
 THEME = THEMES["dark"]
 AGENT_COLORS, TERM_PALETTE = [], []
