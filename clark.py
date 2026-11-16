@@ -684,14 +684,47 @@ class AgentPane(Gtk.Box):
         t.connect("key-press-event", self._on_key)
         t.connect("bell", lambda *_: self._attention())
         t.connect("size-allocate", lambda *_: self.mute(0.5))
+        t.add_events(Gdk.EventMask.SCROLL_MASK)
+        t.connect("scroll-event", self._on_term_scroll)
+
+        # histórico próprio: o claude usa tela alternada e redesenha a tela inteira em vários
+        # momentos (resize, etc.), então o scrollback nativo do VTE não é confiável para "subir
+        # até o início da conversa". Guardamos cada linha que já saiu da tela num Gtk.TextBuffer
+        # (fonte de verdade estável) e usamos o scroll real do GTK em cima dele.
+        self.history_settled_row = -1
+        self.live_mode = True
+        self.history_buf = Gtk.TextBuffer()
+        self.tail_mark = self.history_buf.create_mark(None, self.history_buf.get_end_iter(), False)
+        self.history_view = Gtk.TextView(buffer=self.history_buf, editable=False, cursor_visible=False,
+                                         wrap_mode=Gtk.WrapMode.NONE, left_margin=6, top_margin=4)
+        self.history_view.get_style_context().add_class("history-view")
+        self.history_view.connect("key-press-event", self._on_history_key)
+        self.history_scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.AUTOMATIC,
+                                                  vscrollbar_policy=Gtk.PolicyType.EXTERNAL)
+        self.history_scroll.add(self.history_view)
+        self.history_scroll.get_vadjustment().connect("value-changed", self._on_history_scrolled)
+
+        self.mode_banner = Gtk.Label(label="HISTÓRICO — desça até o fim (ou digite algo) pra voltar")
+        self.mode_banner.get_style_context().add_class("history-banner")
+        self.mode_banner.set_halign(Gtk.Align.START)
+        self.mode_banner.set_valign(Gtk.Align.START)
+        self.mode_banner.set_no_show_all(True)
+        self.mode_banner.hide()
+
+        self.term_overlay = Gtk.Overlay()
+        self.term_overlay.add(self.history_scroll)
+        self.term_overlay.add_overlay(t)
+        self.term_overlay.add_overlay(self.mode_banner)
 
         body = Gtk.Box()
-        body.pack_start(t, True, True, 0)
-        body.pack_start(Gtk.Scrollbar(orientation=Gtk.Orientation.VERTICAL, adjustment=t.get_vadjustment()),
+        body.pack_start(self.term_overlay, True, True, 0)
+        body.pack_start(Gtk.Scrollbar(orientation=Gtk.Orientation.VERTICAL,
+                                      adjustment=self.history_scroll.get_vadjustment()),
                         False, False, 0)
         self.pack_start(head, False, False, 0)
         self.pack_start(body, True, True, 0)
         self.show_all()
+        self.mode_banner.set_visible(False)
         self.preview, self.preview_at = [], 0.0
         self.card = AgentCard(app, self)
         self.spawn()
@@ -713,6 +746,9 @@ class AgentPane(Gtk.Box):
         self.has_input = False
         self.auto_trust = False
         self._set_class("exited", False)
+        if self.history_buf.get_char_count():
+            self._append_settled("\n--- novo processo ---\n")
+        self.history_settled_row = -1
         if self.app.claude:
             argv = [self.app.claude] + self.app.claude_args
             if not any(a.split("=")[0] in SESSION_FLAGS for a in self.app.claude_args):
@@ -776,11 +812,127 @@ class AgentPane(Gtk.Box):
 
     def _on_contents(self, _term):
         now = time.monotonic()
+        self._settle_history()
+        if not self.live_mode:
+            self._refresh_tail()
         if self.auto_trust:
             self._maybe_accept_trust(now)
         if now < self.mute_until or now - self.last_input < 0.3:
             return
         self.last_change = now
+
+    # ── histórico próprio (independente do scrollback do VTE) ──
+    def _settle_history(self):
+        """Copia pro nosso buffer as linhas que já saíram de vista (uma tela inteira atrás do
+        cursor): nesse ponto elas não mudam mais, então podemos guardá-las de vez."""
+        t = self.term
+        try:
+            cur_row = t.get_cursor_position()[1]
+        except (TypeError, GLib.Error):
+            return
+        rows, cols = t.get_row_count(), max(1, t.get_column_count())
+        target = cur_row - rows
+        if target < self.history_settled_row:
+            # o claude limpou a tela (reset/realloc): não dá pra confiar nas linhas ainda não
+            # assentadas da leva anterior, só recomeça a contagem a partir daqui.
+            self.history_settled_row = target
+            return
+        start = self.history_settled_row + 1
+        if target < start:
+            return
+        try:
+            text = t.get_text_range(start, 0, target, cols - 1, None, None)[0] or ""
+        except (TypeError, GLib.Error):
+            return
+        self.history_settled_row = target
+        self._append_settled(text)
+
+    def _append_settled(self, text):
+        lines = "\n".join(ln.rstrip() for ln in text.split("\n"))
+        it = self.history_buf.get_iter_at_mark(self.tail_mark)
+        self.history_buf.insert(it, lines + "\n")
+
+    def _refresh_tail(self):
+        """Espelha a tela atual (ainda viva, pode mudar a cada tecla) depois do histórico já
+        assentado, só pra quem está lendo o histórico ver o fim sem trocar de modo."""
+        t = self.term
+        try:
+            cur_row = t.get_cursor_position()[1]
+        except (TypeError, GLib.Error):
+            return
+        rows, cols = t.get_row_count(), max(1, t.get_column_count())
+        start = max(self.history_settled_row + 1, cur_row - rows + 1)
+        try:
+            text = t.get_text_range(start, 0, cur_row, cols - 1, None, None)[0] or ""
+        except (TypeError, GLib.Error):
+            return
+        tail = "\n".join(ln.rstrip() for ln in text.split("\n"))
+        start_it = self.history_buf.get_iter_at_mark(self.tail_mark)
+        end_it = self.history_buf.get_end_iter()
+        self.history_buf.delete(start_it, end_it)
+        self.history_buf.insert(self.history_buf.get_iter_at_mark(self.tail_mark), tail)
+
+    def _on_term_scroll(self, _w, ev):
+        up = ev.direction == Gdk.ScrollDirection.UP or (
+            ev.direction == Gdk.ScrollDirection.SMOOTH and ev.delta_y < 0)
+        if not up:
+            return False
+        if self.live_mode:
+            self._enter_history_mode()
+        return True
+
+    def _enter_history_mode(self, snap_to_bottom=True):
+        if not self.live_mode:
+            return
+        self.live_mode = False
+        self._refresh_tail()
+        self.term.hide()
+        self.mode_banner.show()
+        if snap_to_bottom:
+            GLib.idle_add(self._scroll_to_bottom_once)
+        self.history_view.grab_focus()
+
+    def _scroll_to_bottom_once(self):
+        adj = self.history_scroll.get_vadjustment()
+        adj.set_value(max(0.0, adj.get_upper() - adj.get_page_size()))
+        return False
+
+    def _exit_history_mode(self):
+        if self.live_mode:
+            return
+        self.live_mode = True
+        self.mode_banner.hide()
+        self.term.show()
+        GLib.idle_add(self._scroll_to_bottom_once)
+        GLib.idle_add(lambda: self.term.grab_focus() and False)
+
+    def _on_history_scrolled(self, adj):
+        """A mesma Gtk.Scrollbar visível ao lado do pane controla o histórico: arrastá-la pra
+        longe do fim entra no modo histórico (mesmo sem usar a roda do mouse), e voltar ao fim
+        devolve o controle pro terminal vivo."""
+        at_bottom = adj.get_value() >= adj.get_upper() - adj.get_page_size() - 2
+        if self.live_mode:
+            if not at_bottom:
+                self._enter_history_mode(snap_to_bottom=False)
+        elif at_bottom:
+            self._exit_history_mode()
+
+    def focus_term(self):
+        """Foca o terminal de verdade, voltando do modo histórico se precisar."""
+        if not self.live_mode:
+            self._exit_history_mode()
+        else:
+            GLib.idle_add(lambda: self.term.grab_focus() and False)
+
+    def _on_history_key(self, _w, ev):
+        if ev.state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SUPER_MASK | Gdk.ModifierType.MOD1_MASK):
+            return False  # deixa atalhos (copiar, etc.) funcionando normalmente
+        nav = (Gdk.KEY_Up, Gdk.KEY_Down, Gdk.KEY_Page_Up, Gdk.KEY_Page_Down, Gdk.KEY_Home,
+              Gdk.KEY_End, Gdk.KEY_Shift_L, Gdk.KEY_Shift_R)
+        if ev.keyval not in nav:
+            self._exit_history_mode()
+            return True
+        return False
 
     def _maybe_accept_trust(self, now):
         if now - self.spawn_time > 60 or self.has_input:
@@ -874,7 +1026,7 @@ class AgentPane(Gtk.Box):
         if ev.type == Gdk.EventType._2BUTTON_PRESS:
             self._rename()
         else:
-            self.term.grab_focus()
+            self.focus_term()
         return True
 
     def _rename(self):
@@ -887,7 +1039,7 @@ class AgentPane(Gtk.Box):
             self.app.save_config()
             pop.popdown()
             self.head_area.queue_draw()
-            self.term.grab_focus()
+            self.focus_term()
         entry.connect("activate", done)
         pop.add(entry)
         pop.show_all()
@@ -1264,6 +1416,11 @@ vte-terminal { padding: 4px 6px; }
 scrollbar, scrollbar trough { background-color: $bg; border: none; }
 scrollbar slider { background-color: $bg4; border-radius: 0; min-width: 6px; border: none; }
 scrollbar slider:hover { background-color: $accent; }
+textview.history-view, textview.history-view text { background-color: $bg; color: $ink; }
+label.history-banner {
+  background-color: $accent; color: $on_accent; font-family: monospace; font-weight: 800;
+  font-size: 10px; padding: 3px 10px; margin: 4px;
+}
 popover { background-color: $bg2; border: 2px solid $accent; border-radius: 0; box-shadow: 4px 4px 0 $shadow; }
 popover label { color: $ink; font-family: monospace; }
 popover entry { font-family: monospace; background-color: $bg; color: $ink; border-radius: 0;
@@ -1668,7 +1825,7 @@ class Clark(Gtk.Window):
         if on:
             self.todo.entry.grab_focus()
         elif self.focused in self.panes:
-            self.focused.term.grab_focus()
+            self.focused.focus_term()
 
     def update_todo_badge(self):
         if not hasattr(self, "todo") or not hasattr(self, "todo_btn"):
@@ -1697,7 +1854,7 @@ class Clark(Gtk.Window):
         self.main_pane = pane
         self.relayout()
         self.save_config()
-        GLib.idle_add(lambda: pane.term.grab_focus() and False)
+        GLib.idle_add(pane.focus_term)
 
     # ── engrenagem: ajustes (tema, fonte, dragões) ──
     def _build_config(self):
@@ -1908,7 +2065,7 @@ class Clark(Gtk.Window):
         self.relayout()
         target = self.main_pane if self.main_pane in self.panes else None
         if target:
-            GLib.idle_add(lambda: target.term.grab_focus() and False)
+            GLib.idle_add(target.focus_term)
 
     def _update_layout_label(self):
         self.layout_btn.set_label("FOCO" if self.layout_mode == "focus" else "GRADE")
@@ -1924,7 +2081,7 @@ class Clark(Gtk.Window):
             self._switch_focus_main(pane)
         elif self.zoomed or self.layout_mode == "focus":
             self.relayout()
-        GLib.idle_add(lambda: pane.term.grab_focus() and False)
+        GLib.idle_add(pane.focus_term)
 
     # ── agentes ──
     def restore_agents(self):
@@ -1943,7 +2100,7 @@ class Clark(Gtk.Window):
         if self.panes:
             self.main_pane = self.panes[min(int(self.config.get("main_agent", 0)), len(self.panes) - 1)]
             self.relayout()
-            GLib.idle_add(lambda: self.main_pane.term.grab_focus() and False)
+            GLib.idle_add(self.main_pane.focus_term)
         self.save_config()
 
     def add_agents(self, n):
@@ -1958,7 +2115,7 @@ class Clark(Gtk.Window):
         self.relayout()
         self.save_config()
         if new:
-            GLib.idle_add(lambda: new[0].term.grab_focus() and False)
+            GLib.idle_add(new[0].focus_term)
 
     def _free_number(self):
         """Menor número livre: fechou o AGENT 2, o próximo volta a ser AGENT 2."""
@@ -1989,7 +2146,7 @@ class Clark(Gtk.Window):
         pane.destroy()
         self.save_config()
         if self.panes:
-            self.main_pane.term.grab_focus()
+            self.main_pane.focus_term()
 
     def close_all(self):
         others = [p for p in self.panes if p is not self.main_pane]
@@ -2011,7 +2168,7 @@ class Clark(Gtk.Window):
     def toggle_zoom(self, pane):
         self.zoomed = None if self.zoomed is pane else pane
         self.relayout()
-        GLib.idle_add(lambda: pane.term.grab_focus() and False)
+        GLib.idle_add(pane.focus_term)
 
     def set_focused(self, pane):
         for p in self.panes:
